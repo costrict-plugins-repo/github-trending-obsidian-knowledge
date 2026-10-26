@@ -1,0 +1,49 @@
+# Broken links
+
+## Unresolved links
+
+The recovery script keeps links from `ai_managed` zones and excludes template placeholders
+and configured `stub_link_patterns` from `.claude/obsidian-knowledge.yaml`.
+Defaults cover prefixes such as `(PAPER)`, `(BOOK)`, and `@Person`.
+
+Inspect every remaining candidate, in batches if needed. Plain-word links can
+be intentional concept stubs or broken references. Apply these rules:
+
+1. **Exact match:** Find the existing file and fix the link.
+2. **Similar match:** Fix the link only when the candidate is unambiguous.
+3. **Ambiguous match:** Add the issue and candidate to `needs-attention.md`.
+4. **Missing file:** For a reference to an expected file, record the missing
+   target. Remove the link only when an established vault precedent supports it.
+5. **Intentional concept stub:** Leave it for future expansion.
+
+Dates, paths, extensions, and missing embeds usually indicate expected files.
+A bare concept such as `[[anxiety]]` might be an intentional stub. When uncertain,
+add the issue to the worklist rather than silently skipping it.
+
+## Deterministic recovery
+
+Use `obsidian-knowledge garden links --apply` for unique recoveries; omit
+`--apply` to preview.
+It can recover a stale prefix only when removing leading path components leaves
+a unique existing suffix of at least `directory/name`. It never falls back from
+a path-shaped target to an unrelated basename. Existing directories are not
+note candidates. Attachments require exact filenames, including extensions;
+normalized and fuzzy comparisons apply only to Markdown notes.
+
+Hidden paths, dependency directories, sync conflicts, and symlinks are excluded
+from candidates. Sources must be visible managed Markdown notes outside
+`_sources/` and configured read-only paths. Apply rechecks write policy and
+delegates to the verified writer; aliases, heading and block suffixes survive.
+
+If CLI results disagree with file contents, reload Obsidian with
+`obsidian command id="app:reload"` and retry.
+
+## Orphans
+
+Run `obsidian orphans`. Add managed-zone orphans to their
+parent index if missing. Ignore orphans outside managed zones and sync conflicts.
+
+## Dead ends
+
+`obsidian deadends` is informational. Leaf notes can
+legitimately have no outgoing links; do not flag them.

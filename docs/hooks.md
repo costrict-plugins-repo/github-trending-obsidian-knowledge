@@ -1,0 +1,167 @@
+# Hooks and vault protection
+
+Hooks recall vault context at session start, protect registered vaults during
+edits, and prompt agents to save reusable knowledge at session end.
+Run [setup](index.md#installation) to register your vault: protection depends on
+`~/.config/obsidian-knowledge/vaults.yaml`.
+
+## Vault protection
+
+The tool-call guard applies these rules:
+
+| Target | Protection |
+| --- | --- |
+| `_sources/` directories | Block writes, renames, moves, and deletion of original files. Reading is allowed. |
+| Files with `dg-publish: true` | Block overwrites, edits, and deletions of existing published files without human consent. New files use the publish-allowlist rule. |
+| Vault paths in destructive commands | Block recognized destructive operations, including recursive removal and moves. |
+| Claude and Codex native memory stores | Block modifications and redirect knowledge to the wiki. |
+
+Codex and Claude use [i-insist](https://github.com/crypdick/i-insist) to execute
+provider-owned rules. `obsidian-knowledge setup --vault /absolute/path/to/vault`
+installs them; add `--skip-guards` to leave guards untouched. To reinstall
+without re-running setup, run:
+
+```bash
+obsidian-knowledge install-rules --global
+```
+
+Codex and Claude session startup, resume, and compaction do not install rules or register
+global hooks; only `setup` and `install-rules` do. `setup --skip-guards` leaves existing
+guard installations unchanged; it neither installs nor removes protection.
+
+The installer installs or upgrades the runner from PyPI with uv, then runs `i-insist ensure`. This registers
+hooks for available harnesses and rejects explicit disable settings. Existing
+runners need version 0.4.0 or later for checker-owned messages; setup upgrades older versions.
+Restart and review `/hooks`, including Codex hook trust. Registration cannot
+verify a running session's hook snapshot or all managed policies.
+
+Rules live in `~/.i-insist/obsidian-knowledge.toml`; omit `--global` to install
+into the current directory's tracked `.i-insist/` instead. The provider owns this file: setup atomically replaces it from the bundled
+template, removing obsolete rules and prior customizations. Other providers' files
+are left alone. There are no per-rule user customizations. Global and local
+rules accumulate. The checker executable comes from this package, so normal
+package upgrades update its policy code without copying scripts into config
+directories. The bundled rule template is `hooks/i-insist.toml`.
+
+Checkers consume i-insist events directly: paths, cwd, shell commands, and file
+changes with an operation and supplied text. i-insist normalizes Write/Edit,
+MultiEdit, notebooks, and apply_patch. The provider does not parse native tool
+payloads or emit harness hook responses. Patch renames check both source and
+destination; deletion skips content and new-filename rules. Shell checks retain their recognized-command limitations.
+Each checker prints JSON `null` to allow or a nonempty denial string to block.
+Messages live in checker code. Policy and registry parse/read failures propagate
+as checker failures; i-insist blocks and displays stderr. Missing optional policy
+files retain their defaults.
+
+The phrase `I insist` anywhere in the latest human message permits overridable calls
+for that response. An explicitly authorized shell call may instead use
+`HUMAN_PERMISSION_GRANTED=1`. Publish allowlists, memory routing, filename
+constraints, and writing conventions set `overridable = false` and still block.
+Neither providers nor agents may rewrite rules to evade a block.
+
+This breaks compatibility with pre-0.4.0 i-insist. Coordinate the runner and provider
+upgrades, rerun setup to replace old registrations, then restart the harness. Old
+registration fields or checker boolean output fail closed during an incomplete upgrade.
+
+The plugin retains its recall, capture, reflection, and secret-scanning hooks.
+Its direct Codex/Claude PreToolUse registrations are replaced by i-insist.
+These checks do not replace filesystem permissions or backups.
+
+## Memory and recall
+
+The session primer gives the agent its memory location and search instructions.
+Repository memory lives in `wiki/repos/<owner>/<repo>/memory/`; outside a
+repository, it lives in `wiki/systems/machines/<hostname>/memory/`.
+Each directory contains a small `MEMORY.md` index linked to individual facts.
+Shared profile memory uses `wiki/systems/knowledge-base/index.md`.
+
+The memory-routing guard blocks modifications anywhere under
+`~/.claude/projects/*/memory/` and `~/.codex/memories/`, including `MEMORY.md`
+and individual fact files. A custom `CODEX_HOME` is respected. Vault memory
+indexes remain writable. Recognized shell writes, including redirects, `tee`,
+and `sed -i`, use the same rule; arbitrary script bodies remain opaque.
+
+The decision-records guard routes decisions to the vault by blocking writes
+under a `docs/decisions/` directory, unless that directory already has
+Git-tracked files. Repositories that keep ADRs there stay writable.
+
+Codex native memory runs separately from plugin recall and capture. To use this
+plugin as your memory source without competing native-memory instructions,
+disable Codex native memory explicitly:
+
+```bash
+codex features disable memories
+```
+
+Restart Codex afterward. This preserves existing native memory files. Plugin
+setup and lifecycle hooks do not change this preference.
+
+The primer routes permission and connection failures to
+`references/access-errors.md` in the loaded `obsidian-knowledge` skill directory.
+Recovery procedures load only when a failure occurs. Codex hooks run from the
+installed CLI package, which does not bundle skills; use the skill path supplied
+by the host rather than resolving this reference beside the hook script.
+
+The capture reminder uses the `obsidian-knowledge` skill for reusable knowledge,
+user research, historical changes, and workflow papercuts. Decide whether
+something merits saving before searching for existing coverage. With no
+candidate, stop without vault searches or reads. Explicit requests to retrieve
+vault knowledge still use search, or a direct read for a known note.
+
+The primer and reminder defer capture policy to the skill. Read its operational
+notes before issuing a write command; they cover filing, memory layout, and
+changelogs. Known destinations need no index or convention discovery. Changelogs
+record consequential structural or operational changes, not ordinary note,
+index, or link edits.
+The reminder also requests repairs to verified stale instructions encountered
+during the task. It does not request a broader audit. Filing nothing is a valid
+outcome.
+
+Do not edit a user's `CLAUDE.md` unless they explicitly request it. If they want
+sessions without the plugin to find their memory, they can add:
+
+```markdown
+Agent memory is managed by the obsidian-knowledge plugin; refer to it
+for memory location, read/write conventions, and session-start recall.
+```
+
+## Secret scanning
+
+The Stop hook scans for unaudited secrets. The first scan covers the vault;
+subsequent scans are incremental. Ask `vault-organizer` to scan the vault for
+secrets, or request a full rescan of all eligible files while preserving audit
+decisions. Both Claude and Codex use the skill's
+[manual scan workflow](https://github.com/crypdick/obsidian-knowledge/blob/main/skills/vault-organizer/SKILL.md#secret-scans).
+It replaces the standalone `/scan-secrets` command. The scanner requires uv,
+which installs its dependencies automatically.
+
+The Stop hook alerts once per finding. It records each file with unaudited
+findings as a checkbox under `## Secret scan findings` in
+`Utility/obsidian-knowledge/needs-attention.md` and removes the entry once every
+finding in that file is audited. A manual scan lists all unaudited findings.
+Known-leaked matches report the literal's position in `.secrets.known-leaked`,
+never the literal itself. Git commit SHAs under `sha` or `commit` keys and hex
+digests in JSON `*_id` or `*_ids` fields count as metadata, not secrets.
+The audit field `sha256_utf8_read_content` is metadata only when its value is
+exactly 64 hex characters. Other fields remain scanned, including a credential
+beside that checksum or the same value assigned to a credential field.
+
+Document your secrets-management convention in the vault so the agent can
+follow it when findings need attention. Review findings before redacting files
+or marking false positives. For a false positive in Markdown, append this
+sentinel on the same line:
+
+```markdown
+Example token: fake-token <!-- pragma: allowlist secret -->
+```
+
+To review existing findings in bulk, run `detect-secrets audit` against the
+vault's `.secrets.baseline`. For leaked passphrases that the scanner misses, add
+one value per line to `<vault>/.secrets.known-leaked` for exact matching.
+
+## Workflow friction
+
+Agents must fix and verify defects introduced by or required for their task.
+For unrelated friction that agents can avoid or the user can fix, they can
+record a [papercut](CLI.md#papercut-logs) and continue. A reminder repeats this distinction
+every 100 shell calls.
