@@ -1,0 +1,121 @@
+# Architecture
+
+The CLI, Streamable HTTP MCP server, and Claude Code and Codex hooks share vault retrieval and protection
+components.
+
+## Codemap
+
+The following directories contain the shared components and host adapters:
+
+| Location | Responsibility |
+| --- | --- |
+| `lib/vault_index/` | Retrieval, configuration, verified file I/O, session primer, papercut logs, and CLI orchestration. |
+| `hooks/` | Lifecycle hooks, provider-owned i-insist checkers and rule template, and the dependency-light vault registry. |
+| `hooks/hookslib/` | Shared protection, capture, transcript, memory-routing, and reflection logic. |
+| `gardener/` | Installed vault maintenance commands, shared traversal and policy, and reviewed repairs. |
+| `scripts/` | Packaging, release, and quality tools. |
+| `plugins/obsidian-knowledge/` | Generated Codex distribution; edit root sources and run `scripts/sync_codex_plugin.py`. |
+
+In the retrieval core, `config.py` defines Pydantic configuration models,
+`models.py` holds shared result types, `filters.py` handles path filtering and
+weights, and `indexer.py` wraps memweave's keyword and dense retrieval.
+`embeddings.py` supplies memweave providers: direct Ollama HTTP embeddings for
+`ollama/` models, an offline provider for keyword-only indexing, and the default
+LiteLLM provider for other model identifiers. Ollama and keyword-only paths never
+import LiteLLM.
+`vault_files.py` handles confined, verified writes and text patches.
+`note_creation.py` reads the opt-in declarative creation defaults from a configured template
+and adds missing creation metadata before a new note's atomic write, without
+running Templater or changing existing notes.
+`vault_listing.py` provides bounded directory discovery. `mcp_index.py` reads
+persisted index status without rebuilding and parses CLI refresh results.
+`mcp_server.py` exposes these operations and bounded CLI search and refresh
+subprocesses over Streamable HTTP. `mcp_native.py` registers confined filesystem append and app-backed tools and
+shares mutation serialization with existing file writes. `obsidian_cli.py` runs
+the official CLI with fixed vault selection, filesystem identity checks, bounded
+output, and subprocess deadlines. Obsidian owns app operations and link rewriting;
+these tools require a live app. Importing `lib` enables beartype runtime checks.
+
+`vector_search.py` registers a memweave hybrid strategy using sqlite-vec's native
+nearest-neighbor query. Memweave normalizes embeddings, so L2 candidate ordering
+matches cosine ordering; the strategy keeps the original cosine scores and
+keyword merge. Model and source filters apply before candidate selection. Pools
+above sqlite-vec's 4096-candidate ceiling retain memweave's exhaustive search.
+Schema initialization adds a covering `(model, source, id)` chunk index to both
+new and existing caches. This keeps candidate eligibility off the large chunk
+text/JSON-embedding table without changing ranking, filters, or embedding policy;
+no re-embedding is required.
+`index_lock.py` owns the existing shared-reader/exclusive-writer file lock.
+CLI retrieval normally waits within its deadline; MCP requests nonblocking
+reader access and reports contention without reading partial vector generations.
+
+The wheel installs `hooks/vault_registry.py` as the top-level `vault_registry`
+module, `hooks/vault_preferences.py` as `vault_preferences`, and
+`hooks/hookslib/` as `hookslib`. The registry owns only host-local vault paths;
+preferences own portable policy and relative template selection. Hooks, the CLI, and gardener commands
+share these canonical module names in source checkouts and installed wheels.
+
+## Invariants
+
+The static import checker is `scripts/prek_hooks/check_architecture.py`.
+Preserve these boundaries:
+
+- `lib` imports neither adapters nor shared hooks, except that `primer.py`
+  imports `hookslib.repo_memory` to resolve the memory destination and `cli.py`
+  dispatches to `gardener.cli`.
+- `hooks/hookslib` imports neither `lib`, `vault_index`, nor `gardener`.
+  It may import the shared `vault_registry` and `vault_preferences` modules.
+- Hook entrypoints import `hookslib` and may import `vault_index` for the doctor.
+- Keep `lib` free of import cycles. Put shared result types in `models.py`.
+
+Gardener commands reuse hook convention checks and the confined, verified vault
+writer. Their shared policy excludes hidden files, dependency directories,
+protected sources, sync conflicts, and symlinks. Scanners retain their documented
+scope; repairs require a writable managed path and an unchanged reviewed baseline.
+The skill contains guidance, while executable maintenance code ships in the wheel.
+
+Review dynamic imports and generated subprocess code separately; the checker
+covers static imports, including local and relative imports.
+
+Runtime requirements:
+
+- i-insist normalizes tool inputs. Vault checks consume neutral file changes and
+  shell commands directly; the provider owns no harness or approval adapter.
+- Hooks must not crash the host. Broad catches at entrypoint boundaries are
+  deliberate and marked `# allow: exception-handling`.
+- Keep the Codex distribution generated. The `codex-plugin-sync` check detects drift.
+- Store caches outside the vault, keyed by vault path, to avoid sync conflicts
+  and collisions between vaults.
+
+## Worktree isolation
+
+Use `new-feature create NAME --no-agent` from the control checkout. Repository
+configuration runs `uv sync --group dev` for each managed worktree; each has its
+own `.venv` and shares the uv package cache. Commit in the feature worktree, then
+run `new-feature merge NAME` and `new-feature teardown NAME` from the control
+checkout.
+
+Install the Git hook with `uv run prek install` from the control checkout.
+Git worktrees share hooks, so installing from a temporary worktree leaves an
+interpreter path that disappears at teardown. Commits run file checks;
+`new-feature merge` runs the full manual-stage gate once before integration.
+There is no post-merge full gate. Release CI owns version updates, so ordinary
+commits do not bump package, plugin, or skill versions. Repository configuration marks
+generated `coverage.json` as disposable, so differing coverage reports do not
+block worktree transfer or teardown.
+
+Tests use temporary caches and disable live Ollama probes. For manual indexing
+in concurrent worktrees, set `OBSIDIAN_VAULT_ROOT` and
+`OBSIDIAN_KNOWLEDGE_CACHE_ROOT` to a throwaway vault and cache. A real vault's
+index is shared across worktrees that target it.
+
+## Bundled indexing library
+
+The fixed memweave runtime is vendored under `obsidian_knowledge_vendor.memweave`
+and included in both wheels and source archives. Its source commit, license, and
+update instructions are in `obsidian_knowledge_vendor/memweave/VENDORED.md`.
+Application imports use this private namespace; installing the application does
+not install or overwrite the separately distributed `memweave` package. Runtime
+requirements are declared directly in the application metadata so registry
+installations do not need a Git checkout. Upstream code retains its own tests and
+style; application quality tools exclude the bundled source.
